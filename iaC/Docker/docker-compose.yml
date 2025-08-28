@@ -1,0 +1,57 @@
+# Stack Zabbix complète : MySQL + serveur Zabbix + interface Web + agent de test
+services:
+  db:
+    image: mysql:8                       # Image officielle MySQL 8
+    restart: unless-stopped              # Redémarre automatiquement sauf arrêt manuel
+    env_file: .env                       # Charge les variables depuis .env (mots de passe, etc.)
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE}  # Nom de la base à créer (ex: zabbix)
+      MYSQL_USER: ${MYSQL_USER}          # Utilisateur applicatif (ex: zabbix)
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}  # Son mot de passe
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}  # Mot de passe root MySQL
+    command:                             # Paramètres recommandés pour Zabbix (UTF-8 complet)
+      ["--character-set-server=utf8mb4","--collation-server=utf8mb4_bin"]
+    volumes:
+      - db_data:/var/lib/mysql           # Persistance des données MySQL
+    healthcheck:                         # Vérifie que MySQL répond avant de lancer Zabbix
+      test: ["CMD-SHELL","mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  zabbix-server:
+    image: zabbix/zabbix-server-mysql:alpine-latest  # Serveur Zabbix (backend)
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy       # Attend que MySQL soit prêt
+    env_file: .env
+    environment:
+      DB_SERVER_HOST: ${DB_SERVER_HOST}  # Hôte de la DB (ici: service 'db')
+      DB_SERVER_PORT: ${DB_SERVER_PORT}  # Port MySQL (3306)
+      MYSQL_DATABASE: ${MYSQL_DATABASE}  # Doit correspondre à ce que MySQL crée
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    ports:
+      - "${ZBX_SERVER_PORT}:10051"       # Expose le port trapper/actif pour les agents externes
+
+  zabbix-web:
+    image: zabbix/zabbix-web-nginx-mysql:alpine-latest  # UI Nginx + PHP
+    restart: unless-stopped
+    depends_on:
+      zabbix-server:
+        condition: service_started       # Lance l’UI après le serveur Zabbix
+    env_file: .env
+    environment:
+      DB_SERVER_HOST: ${DB_SERVER_HOST}  # Paramètres DB identiques au serveur Zabbix
+      DB_SERVER_PORT: ${DB_SERVER_PORT}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      ZBX_SERVER_HOST: zabbix-server     # Où joindre le serveur Zabbix (nom du service)
+      PHP_TZ: ${PHP_TZ}                  # Fuseau horaire PHP (ex: Europe/Paris)
+    ports:
+      - "${ZBX_WEB_PORT}:8080"           # Interface Web accessible depuis l’hôte
+
+volumes:
+  db_data:                               # Volume nommé pour MySQL

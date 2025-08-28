@@ -1,0 +1,79 @@
+# Play : installation/mise à jour idempotente de l'agent GLPI 1.15
+- name: Installer ou mettre à jour l'agent GLPI en version 1.15
+  hosts: agents_glpi           # Groupe d’hôtes ciblé dans l’inventaire
+  become: yes                  # Exécuter les tâches avec privilèges élevés (root)
+
+  vars:
+    glpi_agent_expected_version: "1.15"  # Version attendue pour décider d’une mise à jour
+    glpi_agent_target_url: "https://github.com/glpi-project/glpi-agent/releases/download/1.15/glpi-agent-1.15-linux-installer.pl"  # URL officielle de l’installeur
+    glpi_agent_installer_path: "/tmp/glpi-agent-1.15-linux-installer.pl"  # Chemin local temporaire du script d’install
+    glpi_server_url: "https://www.glpi.cefe.cnrs.fr/marketplace/glpiinventory"  # URL du serveur GLPI à déclarer à l’agent
+    glpi_tag: "CEFE"            # Tag appliqué à la machine côté inventaire
+
+  tasks:
+
+    # Vérifie la présence du binaire pour savoir si l’agent est déjà installé
+    - name: Vérifie si l'agent GLPI est installé
+      stat:
+        path: /usr/bin/glpi-agent
+      register: glpi_agent_stat  # Résultat (glpi_agent_stat.stat.exists: true/false)
+
+    # Télécharge l’installeur seulement si l’agent n’est pas présent
+    - name: Télécharge l'installateur si agent absent ou version incorrecte
+      get_url:
+        url: "{{ glpi_agent_target_url }}"      # Source de l’installeur
+        dest: "{{ glpi_agent_installer_path }}" # Destination locale
+        mode: '0755'                            # Rend exécutable
+      when: glpi_agent_stat.stat.exists == false  # Condition : agent absent
+
+    # Installation silencieuse si l’agent n’existe pas encore
+    - name: Installe l'agent GLPI si non présent
+      command: >
+        perl {{ glpi_agent_installer_path }}
+        --install --silent --no-question         # Mode non interactif
+        --server={{ glpi_server_url }}           # Enregistre le serveur GLPI
+        --tag={{ glpi_tag }}                     # Applique un tag
+        --runnow                                 # Lance un run immédiat après l’install
+      when: glpi_agent_stat.stat.exists == false
+
+    # Lit la version courante de l’agent (si installé) sans marquer le play "changed"
+    - name: Vérifie la version actuelle de l'agent (si installé)
+      command: /usr/bin/glpi-agent --version
+      register: glpi_version_output
+      when: glpi_agent_stat.stat.exists
+      failed_when: false   # Ne fait pas échouer le play si la commande renvoie une erreur
+      changed_when: false  # Pure lecture : pas de changement enregistré
+
+    # Extrait "major.minor" de la sortie (ex.: 1.15) pour comparaison
+    - name: Extrait la version actuelle (si installée)
+      set_fact:
+        glpi_installed_version: "{{ glpi_version_output.stdout | regex_search('([0-9]+\\.[0-9]+)', '\\1') | default('unknown') }}"
+      when: glpi_agent_stat.stat.exists
+
+    # Affiche la version détectée pour le journal d’exécution
+    - name: Affiche la version détectée (si agent installé)
+      debug:
+        msg: "Version actuelle détectée : {{ glpi_installed_version }}"
+      when: glpi_agent_stat.stat.exists
+
+    # Si l’agent est là mais pas à la bonne version, re-télécharge l’installeur
+    - name: Télécharge l'installateur si version incorrecte
+      get_url:
+        url: "{{ glpi_agent_target_url }}"
+        dest: "{{ glpi_agent_installer_path }}"
+        mode: '0755'
+      when:
+        - glpi_agent_stat.stat.exists                 # Agent présent
+        - glpi_installed_version != glpi_agent_expected_version  # Mauvaise version
+
+    # Met à jour l’agent en relançant l’installeur en mode silencieux
+    - name: Met à jour l'agent GLPI si version incorrecte
+      command: >
+        perl {{ glpi_agent_installer_path }}
+        --install --silent --no-question
+        --server={{ glpi_server_url }}
+        --tag={{ glpi_tag }}
+        --runnow
+      when:
+        - glpi_agent_stat.stat.exists
+        - glpi_installed_version != glpi_agent_expected_version
