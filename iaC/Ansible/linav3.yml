@@ -1,0 +1,89 @@
+- name: Télécharger et installer le paquet lina en fonction du système
+  hosts: all
+  become: true
+  vars:
+    local_deb_path: "/home/ansibleuser/AgentLina/files/lina.deb"
+    remote_deb_path: "/tmp/lina.deb"
+    validate_certs: false
+
+    # --- Debian Section ---
+
+  tasks:
+
+    - name: Vérifier si le paquet lina est déjà installé
+      when: ansible_os_family == "Debian"
+      shell: 'dpkg -s livenavigator | grep "Status: install ok installed"'
+      register: lina_installed
+      ignore_errors: yes
+      changed_when: false
+
+    - name: Installer les paquets requis (Debian)
+      when: 
+        - ansible_os_family == "Debian"
+        - lina_installed.rc != 0
+      ansible.builtin.shell: |
+        apt-get update && apt-get install -y --no-install-recommends \
+            libxss1 libxi6 \
+            gnome-shell-extension-top-icons-plus || true
+
+    - name: Copier le .deb sur le contrôleur
+      when: 
+        - ansible_os_family == "Debian"
+        - lina_installed.rc != 0
+      copy:
+        src: "{{ local_deb_path }}"
+        dest: "{{ remote_deb_path }}"
+        mode: '0644'
+
+    - name: Vérifier que le .deb existe sur la machine distante
+      when: 
+        - ansible_os_family == "Debian"
+        - lina_installed.rc != 0
+      ansible.builtin.stat:
+        path: "{{ remote_deb_path }}"
+      register: deb_file_check
+
+    - name: Installer lina.deb avec les variables d’environnement nécessaires
+      when: 
+        - ansible_os_family == "Debian"
+        - lina_installed.rc != 0
+        - deb_file_check.stat.exists
+      ansible.builtin.shell: dpkg -i ./lina.deb
+      args:
+        chdir: /tmp
+      environment:
+        HN_SERVER_NAME: "{{ hn_server_name }}"
+        HN_WORK_DIR: "{{ hn_work_dir }}"
+      become: true
+      register: dpkg_result
+      ignore_errors: true
+
+    # # --- RedHat Section ---
+    # - name: Mettre à jour les dépôts YUM/DNF (RedHat)
+    #   when: ansible_os_family == "RedHat"
+    #   ansible.builtin.yum:
+    #     name: "*"
+    #     state: latest
+    #     update_cache: yes
+
+    # - name: Installer les paquets requis (RedHat)
+    #   when: ansible_os_family == "RedHat"
+    #   ansible.builtin.yum:
+    #     name:
+    #       - libXScrnSaver
+    #       - libXi
+    #     state: present
+
+    # - name: Télécharger le .rpm (RedHat)
+    #   when: ansible_os_family == "RedHat"
+    #   ansible.builtin.get_url:
+    #     url: "{{ rpm_url }}"
+    #     dest: "{{ rpm_filename }}"
+    #     mode: '0644'
+    #     validate_certs: "{{ not skip_ssl_check }}"
+
+    # - name: Installer le .rpm
+    #   when: ansible_os_family == "RedHat"
+    #   ansible.builtin.yum:
+    #     name: "{{ rpm_filename }}"
+    #     state: present
